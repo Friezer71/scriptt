@@ -84,12 +84,34 @@ local Settings = {
     CaptureRadius = 50
 }
 
-local Enemies = {}
+local Allies = {}
 local lastShotTime = 0
 local currentAimOffset = Vector3.new(0, 0, 0)
 local offsetChangeTimer = 0
 local OFFSET_CHANGE_INTERVAL = 0.35 -- [IMPROVED] Longer interval = smoother, less jittery
 local lastTargetPart = nil -- [NEW] Track target changes for smooth transitions
+
+-- [NEW] Configuration Save/Load System
+local CONFIG_FILE = "monpaff_config.json"
+local function SaveConfig()
+    local config = {Allies = Allies}
+    local json = game:GetService("HttpService"):JSONEncode(config)
+    if pcall(writefile, CONFIG_FILE, json) then
+        warn("[monpaff] Config saved!")
+    end
+end
+local function LoadConfig()
+    if pcall(readfile, CONFIG_FILE) then
+        local json = readfile(CONFIG_FILE)
+        local config = game:GetService("HttpService"):JSONDecode(json)
+        if config.Allies then
+            for player, isAlly in pairs(config.Allies) do
+                Allies[player] = isAlly
+            end
+        end
+        warn("[monpaff] Config loaded!")
+    end
+end
 
 -- Remote References
 local SetControlsRemote = ReplicatedStorage:FindFirstChild("Remotes") 
@@ -122,7 +144,7 @@ function Utils:GetTarget()
     local targetParts = {"UpperTorso", "LowerTorso", "UpperTorso"} -- Biased towards torso
 
     for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character and (not Settings.TeamCheck or Enemies[p.Name]) then
+        if p ~= LocalPlayer and p.Character and (not Settings.TeamCheck or not Allies[p.Name]) then
             local hum = p.Character:FindFirstChildOfClass("Humanoid")
             
             local randomPartName = targetParts[math.random(1, #targetParts)]
@@ -334,7 +356,7 @@ function UI:AddSpoofBtn(name, device)
     end)
 end
 
-function UI:AddCheckbox(playerName, isEnemy, callback)
+function UI:AddCheckbox(playerName, isAlly, callback)
     local frame = Utils:Create("Frame", {
         Size = UDim2.new(1, -5, 0, 35), BackgroundColor3 = Color3.fromRGB(30, 30, 45),
         Parent = self.Content
@@ -344,13 +366,13 @@ function UI:AddCheckbox(playerName, isEnemy, callback)
     -- Checkbox (visual box)
     local checkbox = Utils:Create("Frame", {
         Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(0, 8, 0.5, -12),
-        BackgroundColor3 = isEnemy and Settings.Accent or Color3.fromRGB(50, 50, 60),
+        BackgroundColor3 = isAlly and Settings.Accent or Color3.fromRGB(50, 50, 60),
         Parent = frame
     })
     Utils:Create("UICorner", {CornerRadius = UDim.new(0, 4), Parent = checkbox})
     
     -- Checkmark if checked
-    if isEnemy then
+    if isAlly then
         Utils:Create("TextLabel", {
             Text = "✓", Size = UDim2.new(1, 0, 1, 0),
             BackgroundTransparency = 1, TextColor3 = Color3.new(1,1,1),
@@ -360,7 +382,7 @@ function UI:AddCheckbox(playerName, isEnemy, callback)
     
     -- Label with player name and status
     local lbl = Utils:Create("TextLabel", {
-        Text = playerName .. " (" .. (isEnemy and "ENEMY" or "ALLY") .. ")",
+        Text = playerName .. " (" .. (isAlly and "ALLY" or "ENEMY") .. ")",
         Size = UDim2.new(1, -50, 1, 0), Position = UDim2.new(0, 40, 0, 0),
         BackgroundTransparency = 1, TextColor3 = Color3.new(0.9, 0.9, 0.9),
         Font = Enum.Font.GothamMedium, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
@@ -370,20 +392,20 @@ function UI:AddCheckbox(playerName, isEnemy, callback)
     -- Click handler
     frame.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 then
-            isEnemy = not isEnemy
-            callback(isEnemy)
+            isAlly = not isAlly
+            callback(isAlly)
             
             -- Update checkbox appearance
-            checkbox.BackgroundColor3 = isEnemy and Settings.Accent or Color3.fromRGB(50, 50, 60)
+            checkbox.BackgroundColor3 = isAlly and Settings.Accent or Color3.fromRGB(50, 50, 60)
             checkbox:ClearAllChildren()
-            if isEnemy then
+            if isAlly then
                 Utils:Create("TextLabel", {
                     Text = "✓", Size = UDim2.new(1, 0, 1, 0),
                     BackgroundTransparency = 1, TextColor3 = Color3.new(1,1,1),
                     Font = Enum.Font.GothamBold, TextSize = 16, Parent = checkbox
                 })
             end
-            lbl.Text = playerName .. " (" .. (isEnemy and "ENEMY" or "ALLY") .. ")"
+            lbl.Text = playerName .. " (" .. (isAlly and "ALLY" or "ENEMY") .. ")"
         end
     end)
 end
@@ -392,14 +414,15 @@ function UI:AutoDetectTeam()
     if LocalPlayer.Team then
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= LocalPlayer then
-                if p.Team and p.Team ~= LocalPlayer.Team then
-                    Enemies[p.Name] = true
+                if p.Team and p.Team == LocalPlayer.Team then
+                    Allies[p.Name] = true  -- Same team = ally
                 else
-                    Enemies[p.Name] = nil
+                    Allies[p.Name] = nil  -- Different team = enemy
                 end
             end
         end
     end
+    SaveConfig()
     -- Rebuild the ally list after detection
     self:LoadTab("Allies")
 end
@@ -423,13 +446,14 @@ function UI:CaptureAlliesInRadius()
             if targetHrp then
                 local distance = (targetHrp.Position - hrp.Position).Magnitude
                 if distance <= radius then
-                    Enemies[p.Name] = nil  -- Mark as ally (not enemy)
+                    Allies[p.Name] = true  -- Mark as ally
                     table.insert(captured, p.Name)
                 end
             end
         end
     end
     
+    SaveConfig()
     -- Rebuild UI
     self:LoadTab("Allies")
     
@@ -485,7 +509,7 @@ function UI:BuildAllyList()
     
     -- Label
     Utils:Create("TextLabel", {
-        Text = "✓ = ENEMY | ☐ = ALLY", Size = UDim2.new(1, -5, 0, 25),
+        Text = "✓ = ALLY | ☐ = ENEMY", Size = UDim2.new(1, -5, 0, 25),
         BackgroundColor3 = Color3.fromRGB(25, 25, 35), TextColor3 = Color3.fromRGB(150, 150, 150),
         Font = Enum.Font.GothamMedium, TextSize = 13, Parent = self.Content
     })
@@ -494,13 +518,14 @@ function UI:BuildAllyList()
     -- Add checkboxes for each player
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
-            local isEnemy = Enemies[p.Name]
-            self:AddCheckbox(p.Name, isEnemy, function(enemy)
-                if enemy then
-                    Enemies[p.Name] = true
+            local isAlly = Allies[p.Name]
+            self:AddCheckbox(p.Name, isAlly, function(ally)
+                if ally then
+                    Allies[p.Name] = true
                 else
-                    Enemies[p.Name] = nil
+                    Allies[p.Name] = nil
                 end
+                SaveConfig()  -- Auto-save on change
             end)
         end
     end
@@ -614,7 +639,7 @@ task.spawn(function()
         FOVGui.Visible = Settings.ShowFOV and not Settings.DiscreetMode
 
         for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character and (not Settings.TeamCheck or Enemies[p.Name]) then
+            if p ~= LocalPlayer and p.Character and (not Settings.TeamCheck or not Allies[p.Name]) then
                 local char = p.Character
                 local h = char:FindFirstChild("monpaff_H")
                 if Settings.ESP and not Settings.DiscreetMode then
@@ -644,44 +669,47 @@ GlobalMaid:GiveTask(UserInputService.InputBegan:Connect(function(i, g)
     end
 end))
 
--- [NEW] Helper to recalculate enemies dynamically based on Team
-local function RecalculateEnemies()
+-- [NEW] Helper to recalculate allies dynamically based on Team
+local function RecalculateAllies()
     if LocalPlayer.Team then
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= LocalPlayer then
-                if p.Team and p.Team ~= LocalPlayer.Team then
-                    Enemies[p.Name] = true
+                if p.Team and p.Team == LocalPlayer.Team then
+                    Allies[p.Name] = true  -- Same team = ally
                 else
-                    Enemies[p.Name] = nil  -- Allies aren't enemies
+                    Allies[p.Name] = nil  -- Different team = enemy (not saved)
                 end
             end
         end
     end
 end
 
--- Auto-update enemies at each round (character spawn)
+-- Auto-update allies at each round (character spawn)
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(2) -- [IMPROVED] Increased wait to ensure teams are properly loaded
-    RecalculateEnemies()
+    RecalculateAllies()
 end)
 
--- Keep enemy list synced when players join
+-- Keep ally list synced when players join
 Players.PlayerAdded:Connect(function(p)
     if p ~= LocalPlayer then
         task.wait(0.5)  -- Wait for team to be assigned
-        if LocalPlayer.Team and p.Team and p.Team ~= LocalPlayer.Team then
-            Enemies[p.Name] = true
+        if LocalPlayer.Team and p.Team and p.Team == LocalPlayer.Team then
+            Allies[p.Name] = true
         end
     end
 end)
 
 -- Clean up when players leave
 Players.PlayerRemoving:Connect(function(p)
-    Enemies[p.Name] = nil
+    Allies[p.Name] = nil
 end)
 
+-- Load config on script start
+LoadConfig()
+
 -- Initial calculation on script load
-task.delay(2, RecalculateEnemies)
+task.delay(2, RecalculateAllies)
 
 UI:Init()
 warn("[monpaff] Elite Suite v9.0 Loaded. Sidebar & Spoofer Ready.")
