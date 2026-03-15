@@ -56,6 +56,7 @@ local Settings = {
     TeamCheck = true,
     AutoFire = false,
     AutoFireCooldown = 0.11, -- [IMPROVED] Slightly longer for more legit feel
+    AutoFireReaction = 50, -- [NEW] Reaction time in MS (50-200 for human-like, lower = faster)
     TargetFOV = 150,
     Smoothness = 0.21, -- [IMPROVED] Higher smoothness = slower, more human-like tracking
     TargetPart = "UpperTorso",
@@ -90,6 +91,8 @@ local currentAimOffset = Vector3.new(0, 0, 0)
 local offsetChangeTimer = 0
 local OFFSET_CHANGE_INTERVAL = 0.35 -- [IMPROVED] Longer interval = smoother, less jittery
 local lastTargetPart = nil -- [NEW] Track target changes for smooth transitions
+local autoFireReactionTime = 0 -- [NEW] Track reaction delay for human-like shooting
+local autoFireReadyTime = 0 -- [NEW] When the script "decided" to shoot
 
 -- [NEW] Configuration Save/Load System
 local CONFIG_FILE = "monpaff_config.json"
@@ -259,6 +262,7 @@ function UI:LoadTab(name)
         self:AddToggle("Auto Fire", "AutoFire")
         self:AddToggle("Wall Detection", "WallCheck")
         self:AddToggle("Team Check", "TeamCheck")
+        self:AddSlider("AutoFire Reaction (MS)", 10, 300, Settings.AutoFireReaction, function(v) Settings.AutoFireReaction = v end)
         self:AddCycle("Aim Priority", {"FOV", "Distance"}, Settings.AimPriority, function(choice)
             Settings.AimPriority = choice
         end)
@@ -593,17 +597,28 @@ RunService:BindToRenderStep("monpaff_Elite_Core", Enum.RenderPriority.Camera.Val
         local targetPosition = target.Position + currentAimOffset
         -- [IMPROVED] Higher smoothness value (0.21) means slower, more natural tracking
         Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, targetPosition), 1 - Settings.Smoothness)
+    else
+        offsetChangeTimer = 0
+        currentAimOffset = Vector3.new(0, 0, 0)
+    end
+    
+    -- [NEW] Auto Fire - Fires when target is in FOV (no manual aiming needed)
+    if Settings.AutoFire and target and (tick() - lastShotTime) > Settings.AutoFireCooldown then
+        -- [NEW] Human-like reaction time before shooting
+        if autoFireReadyTime == 0 then
+            -- Pick a random reaction time between 0 and AutoFireReaction milliseconds
+            autoFireReadyTime = tick() + (Settings.AutoFireReaction / 1000)
+        end
         
-        -- Auto Fire
-        if Settings.AutoFire and (tick() - lastShotTime) > Settings.AutoFireCooldown then
+        if tick() >= autoFireReadyTime then
             lastShotTime = tick()
             mouse1press()
             task.wait(0.05)
             mouse1release()
+            autoFireReadyTime = 0  -- Reset for next target
         end
-    else
-        offsetChangeTimer = 0
-        currentAimOffset = Vector3.new(0, 0, 0)
+    elseif not target then
+        autoFireReadyTime = 0  -- Reset if no target
     end
 
     -- Trigger Logic
